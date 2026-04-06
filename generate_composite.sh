@@ -7,7 +7,7 @@ VPS_HOST="152.228.133.219"
 # Derive version from branch name: GAMA_YYYY-MM → YYYY.MM
 BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 if [[ "$BRANCH" =~ GAMA_([0-9]{4}-[0-9]{2}) ]]; then
-    GAMA_VERSION="${BASH_REMATCH[1]//-/.}"   # 2025-06 → 2025.06
+    GAMA_VERSION="${BASH_REMATCH[1]}"
     echo "Branch ${BRANCH} → version=${GAMA_VERSION}"
 else
     echo "ERROR: branch '${BRANCH}' does not match GAMA_YYYY-MM"
