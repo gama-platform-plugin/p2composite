@@ -1,4 +1,5 @@
 name: Update P2 Composite
+run-name: "Update P2 Composite (${{ github.event.client_payload.repo || 'manual' }})"
 
 on:
   repository_dispatch:
