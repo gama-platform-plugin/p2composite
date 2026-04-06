@@ -4,7 +4,7 @@ set -e
 ORG="${GITHUB_ORG:-gama-experimental}"
 VPS_HOST="152.228.133.219"
 
-# Derive version from branch name: GAMA_YYYY-MM → YYYY.M.PATCH
+# Derive version from branch name: GAMA_YYYY-MM → YYYY.MM
 BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 if [[ "$BRANCH" =~ GAMA_([0-9]{4}-[0-9]{2}) ]]; then
     GAMA_VERSION="${BASH_REMATCH[1]//-/.}"   # 2025-06 → 2025.06
@@ -19,19 +19,12 @@ VPS_DIR="/var/www/gama_updates/experimental/${GAMA_VERSION}"
 
 echo "=== Fetching plugin repos from org: ${ORG} ==="
 
-# List all repos in the org that are marked as gama plugins (topic: gama-experimental-plugin)
+# Include all non-archived repos EXCEPT those tagged "template" or "no-p2".
+# To opt a repo out of the composite, add the "no-p2" topic to it.
+# Infrastructure repos (plugin-template, p2composite) should carry the "template" topic.
 REPOS=$(gh api "orgs/${ORG}/repos" \
     --paginate \
-    --jq '.[] | select(.topics // [] | contains(["gama-experimental-plugin"])) | .name' \
-    2>/dev/null || true)
-
-# Fallback: if no topics filter works, list all non-template, non-composite repos
-if [ -z "$REPOS" ]; then
-    echo "No repos found with topic filter — listing all org repos"
-    REPOS=$(gh api "orgs/${ORG}/repos" \
-        --paginate \
-        --jq '.[] | select(.is_template == false) | select(.name != "p2composite") | select(.name != "plugin-template") | .name')
-fi
+    --jq '.[] | select(.archived == false) | select(.topics | (contains(["template"]) or contains(["no-p2"])) | not) | .name')
 
 REPO_COUNT=$(echo "$REPOS" | grep -c . || true)
 echo "Found ${REPO_COUNT} plugin repos"
