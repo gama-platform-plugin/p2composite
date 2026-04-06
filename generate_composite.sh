@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-ORG="${GITHUB_ORG:-gama-experimental}"
+ORG="${GITHUB_ORG:-gama-plugin}"
 VPS_HOST="152.228.133.219"
 
 # Derive version from branch name: GAMA_YYYY-MM → YYYY.MM
@@ -14,8 +14,8 @@ else
     exit 1
 fi
 
-BASE_URL="https://updates.gama-platform.org/experimental/${GAMA_VERSION}"
-VPS_DIR="/var/www/gama_updates/experimental/${GAMA_VERSION}"
+BASE_URL="https://updates.gama-platform.org/plugin/${GAMA_VERSION}"
+VPS_DIR="/var/www/gama_updates/plugin/${GAMA_VERSION}"
 
 echo "=== Fetching plugin repos from org: ${ORG} ==="
 
@@ -44,7 +44,7 @@ done
 cat > compositeContent.xml <<EOF
 <?xml version='1.0' encoding='UTF-8'?>
 <?compositeMetadataRepository version='1.0.0'?>
-<repository name='GAMA Experimental Plugins'
+<repository name='GAMA plugin Plugins'
   type='org.eclipse.equinox.internal.p2.metadata.repository.CompositeMetadataRepository'
   version='1.0.0'>
   <properties size='1'>
@@ -60,7 +60,7 @@ EOF
 cat > compositeArtifacts.xml <<EOF
 <?xml version='1.0' encoding='UTF-8'?>
 <?compositeArtifactRepository version='1.0.0'?>
-<repository name='GAMA Experimental Plugins'
+<repository name='GAMA plugin Plugins'
   type='org.eclipse.equinox.internal.p2.artifact.repository.CompositeArtifactRepository'
   version='1.0.0'>
   <properties size='1'>

@@ -1,11 +1,11 @@
-# GAMA Experimental — P2 Composite Repository
+# GAMA plugin — P2 Composite Repository
 
-This repo manages the **composite p2 update site** for GAMA experimental plugins.
+This repo manages the **composite p2 update site** for GAMA plugin plugins.
 
 Users point Eclipse to a single URL and transparently install any plugin from the org:
 
 ```
-https://updates.gama-platform.org/experimental/YYYY.MM/
+https://updates.gama-platform.org/plugin/YYYY.MM/
 ```
 
 The composite itself contains no plugin code — it is just two XML files (`compositeContent.xml` and `compositeArtifacts.xml`) listing all child p2 repositories, one per plugin repo.
@@ -17,11 +17,11 @@ The composite itself contains no plugin code — it is just two XML files (`comp
 Each plugin repo in this GitHub org builds and deploys its own self-contained p2 site to a subdirectory on the server:
 
 ```
-/var/www/gama_updates/experimental/YYYY.MM/
+/var/www/gama_updates/plugin/YYYY.MM/
 ├── compositeContent.xml        ← managed by this repo
 ├── compositeArtifacts.xml      ← managed by this repo
-├── gama.experimental.flooding/ ← deployed by the flooding repo's CI
-├── gama.experimental.markdown/ ← deployed by the markdown repo's CI
+├── gama.plugin.flooding/ ← deployed by the flooding repo's CI
+├── gama.plugin.markdown/ ← deployed by the markdown repo's CI
 └── ...
 ```
 
