@@ -239,7 +239,7 @@ bump_gama_parent_properties() {
         -u "//mvn:properties/mvn:gama.p2.version" -v "$GAMA_P2_VERSION" \
         "$pom"
     run xmlstarlet ed -L -N "$NS" \
-        -u "//mvn:properties/mvn:gama.version" -v "[${GAMA_P2_VERSION}.0,)" \
+        -u "//mvn:properties/mvn:gama.version" -v "0.0.0" \
         "$pom"
     local eclipse_url
     eclipse_url=$(xmlstarlet sel -N "$NS" -t \
