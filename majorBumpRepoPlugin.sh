@@ -287,6 +287,23 @@ bump_gama_parent_properties() {
     fi
 }
 
+bump_workflow_jdk() {
+    local repo_dir="$1"
+    [[ -n "$JDK_VERSION" ]] || return 0
+    local workflows_dir="${repo_dir}/.github/workflows"
+    [[ -d "$workflows_dir" ]] || return 0
+
+    while IFS= read -r -d '' yml; do
+        echo "  workflow:        $yml"
+        run sed -i -E \
+            's/(java-version:[[:space:]]*")[0-9]+(")/\1'"${JDK_VERSION}"'\2/' \
+            "$yml"
+        run sed -i -E \
+            's/(Set up Java )[0-9]+/\1'"${JDK_VERSION}"'/' \
+            "$yml"
+    done < <(find "$workflows_dir" -name "*.yml" -print0)
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # bump_repo  —  the single entry point for processing one repo
 #
@@ -330,6 +347,7 @@ bump_repo() {
 
     bump_gama_parent_properties "${repo_dir}/gama.plugin.parent/pom.xml"
     bump_p2site_pom             "${repo_dir}/gama.plugin.p2updatesite/pom.xml"
+    bump_workflow_jdk           "$repo_dir"
 
     while IFS= read -r -d '' fxml; do
         bump_feature_xml "$fxml" "$is_template"
