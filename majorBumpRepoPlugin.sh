@@ -287,6 +287,27 @@ bump_gama_parent_properties() {
     fi
 }
 
+bump_submodule_poms() {
+    local repo_dir="$1"
+    local NS="mvn=http://maven.apache.org/POM/4.0.0"
+    while IFS= read -r -d '' pom; do
+        local match
+        match=$(xmlstarlet sel -N "$NS" -t \
+            -v "//mvn:parent[mvn:artifactId='gama.plugin.parent']/mvn:version" \
+            "$pom" 2>/dev/null || true)
+        [[ -z "$match" ]] && continue
+        echo "  pom (module):    $pom"
+        run xmlstarlet ed -L -N "$NS" \
+            -u "//mvn:parent[mvn:artifactId='gama.plugin.parent']/mvn:version" \
+            -v "$GAMA_MAVEN_VERSION" \
+            "$pom"
+    done < <(find "$repo_dir" -name "pom.xml" \
+        -not -path "*/target/*" \
+        -not -path "*/gama.plugin.parent/*" \
+        -not -path "*/gama.plugin.p2updatesite/*" \
+        -print0)
+}
+
 bump_workflow_jdk() {
     local repo_dir="$1"
     [[ -n "$JDK_VERSION" ]] || return 0
@@ -347,6 +368,7 @@ bump_repo() {
 
     bump_gama_parent_properties "${repo_dir}/gama.plugin.parent/pom.xml"
     bump_p2site_pom             "${repo_dir}/gama.plugin.p2updatesite/pom.xml"
+    bump_submodule_poms         "$repo_dir"
     bump_workflow_jdk           "$repo_dir"
 
     while IFS= read -r -d '' fxml; do
