@@ -323,6 +323,13 @@ bump_workflow_jdk() {
             's/(Set up Java )[0-9]+/\1'"${JDK_VERSION}"'/' \
             "$yml"
     done < <(find "$workflows_dir" -name "*.yml" -print0)
+
+    while IFS= read -r -d '' mf; do
+        echo "  MANIFEST.MF:     $mf"
+        run sed -i -E \
+            's/(Bundle-RequiredExecutionEnvironment: JavaSE-)[0-9]+/\1'"${JDK_VERSION}"'/' \
+            "$mf"
+    done < <(find "$repo_dir" -name "MANIFEST.MF" -not -path "*/target/*" -print0)
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
