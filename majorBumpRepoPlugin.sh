@@ -88,7 +88,7 @@ else
     exit 1
 fi
 
-GAMA_P2_VERSION="${YEAR}.${MONTH_PADDED}"            # 2026.04
+GAMA_P2_VERSION="${YEAR}.${MONTH}"                   # 2026.4
 GAMA_MAVEN_VERSION="${YEAR}.${MONTH}.0-SNAPSHOT"     # 2026.4.0-SNAPSHOT
 GAMA_FEATURE_VERSION="${YEAR}.${MONTH}.0.qualifier"  # 2026.4.0.qualifier
 
@@ -342,6 +342,20 @@ bump_submodule_poms() {
 
 bump_workflow_jdk() {
     local repo_dir="$1"
+
+    # Bundle-Version is always bumped regardless of --jdk-version
+    while IFS= read -r -d '' mf; do
+        echo "  MANIFEST.MF:     $mf"
+        run sed -i -E \
+            's/^(Bundle-Version: )20[0-9][0-9]\.[0-9]+\.0\.qualifier$/\1'"${GAMA_FEATURE_VERSION}"'/' \
+            "$mf"
+        if [[ -n "$JDK_VERSION" ]]; then
+            run sed -i -E \
+                's/(Bundle-RequiredExecutionEnvironment: JavaSE-)[0-9]+/\1'"${JDK_VERSION}"'/' \
+                "$mf"
+        fi
+    done < <(find "$repo_dir" -name "MANIFEST.MF" -not -path "*/target/*" -print0)
+
     [[ -n "$JDK_VERSION" ]] || return 0
     local workflows_dir="${repo_dir}/.github/workflows"
     [[ -d "$workflows_dir" ]] || return 0
@@ -355,13 +369,6 @@ bump_workflow_jdk() {
             's/(Set up Java )[0-9]+/\1'"${JDK_VERSION}"'/' \
             "$yml"
     done < <(find "$workflows_dir" -name "*.yml" -print0)
-
-    while IFS= read -r -d '' mf; do
-        echo "  MANIFEST.MF:     $mf"
-        run sed -i -E \
-            's/(Bundle-RequiredExecutionEnvironment: JavaSE-)[0-9]+/\1'"${JDK_VERSION}"'/' \
-            "$mf"
-    done < <(find "$repo_dir" -name "MANIFEST.MF" -not -path "*/target/*" -print0)
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
