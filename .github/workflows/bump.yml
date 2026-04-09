@@ -73,7 +73,7 @@ jobs:
     steps:
       # Fetch majorBumpRepoPlugin.sh from p2composite into a separate subdirectory
       - name: Checkout p2composite (bump script)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.ORG }}/p2composite
           ref: ${{ inputs.from_branch }}
@@ -82,11 +82,19 @@ jobs:
 
       # Check out the target repo into the default workspace root
       - name: Checkout ${{ matrix.repo }} @ ${{ inputs.from_branch }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.ORG }}/${{ matrix.repo }}
           ref: ${{ inputs.from_branch }}
           token: ${{ secrets.ORG_DISPATCH_TOKEN }}
+
+      - name: Install xmlstarlet
+        run: |
+          sudo apt-get install -y xmlstarlet
+          echo "== Workspace"
+          ls -lah
+          echo "== Local"
+          ls -lah $GITHUB_WORKSPACE
 
       - name: Configure git identity
         run: |
@@ -106,7 +114,7 @@ jobs:
           [[ -n "$DEPS_TO_ADD"    ]] && FLAGS="$FLAGS --deps-to-add    $DEPS_TO_ADD"
           [[ -n "$DEPS_TO_REMOVE" ]] && FLAGS="$FLAGS --deps-to-remove $DEPS_TO_REMOVE"
 
-          bash bump-tools/majorBumpRepoPlugin.sh \
+          bash "$GITHUB_WORKSPACE"/bump-tools/majorBumpRepoPlugin.sh \
             --repo-dir . \
             --branch  "$NEW_BRANCH" \
             --eclipse "$ECLIPSE_RELEASE" \
