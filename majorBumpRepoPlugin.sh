@@ -294,7 +294,8 @@ bump_repo() {
         if git -C "$repo_dir" diff --quiet HEAD; then
             git -C "$repo_dir" commit --allow-empty -m "chore: bump to ${NEW_BRANCH}"
         else
-            git -C "$repo_dir" add -A
+            # Stage everything except the bump-tools directory
+            git -C "$repo_dir" add -A -- ':!bump-tools'
             git -C "$repo_dir" commit -m "chore: bump to ${NEW_BRANCH}"
         fi
         git -C "$repo_dir" push -u origin "$NEW_BRANCH"
