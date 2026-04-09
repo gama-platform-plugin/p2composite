@@ -187,43 +187,70 @@ bump_category_xml() {
         "$xml"
 }
 
-apply_dep_changes() {
-    local pom="$1"
+apply_manifest_changes() {
+    local repo_dir="$1"
+    local pom="${repo_dir}/gama.plugin.parent/pom.xml"
     [[ -f "$pom" ]] || return 0
 
-    # Maven pom.xml carries a default namespace — all XPath must use the mvn: prefix
     local NS="mvn=http://maven.apache.org/POM/4.0.0"
-    local XPATH_DEP="//mvn:dependencies/mvn:dependency[mvn:artifactId"
+    local py="${SCRIPT_DIR}/manipulateRequireBundle.py"
 
-    dep_exists() {
-        [[ -n "$(xmlstarlet sel -N "$NS" -t \
-            -v "${XPATH_DEP}='${1}']/mvn:artifactId" "$pom" 2>/dev/null)" ]]
-    }
+    # 1. Collect org.gama artifactIds still in <dependencies>
+    local pom_deps=()
+    while IFS= read -r artifact; do
+        [[ -n "$artifact" ]] && pom_deps+=("$artifact")
+    done < <(xmlstarlet sel -N "$NS" -t \
+        -m "//mvn:dependencies/mvn:dependency[mvn:groupId='org.gama']" \
+        -v "mvn:artifactId" -n \
+        "$pom" 2>/dev/null || true)
 
-    for artifact in "${DEPS_TO_REMOVE[@]+"${DEPS_TO_REMOVE[@]}"}"; do
-        if ! dep_exists "$artifact"; then
-            echo "  dep remove: SKIP — ${artifact} not found in $pom" >&2
-            continue
-        fi
-        echo "  dep remove:      $artifact"
+    # Nothing to do at all → bail early
+    if [[ ${#pom_deps[@]}    -eq 0 \
+       && ${#DEPS_TO_ADD[@]}    -eq 0 \
+       && ${#DEPS_TO_REMOVE[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # 2. For each MANIFEST.MF: migrate pom deps + apply explicit adds/removes
+    while IFS= read -r -d '' mf; do
+        echo "  MANIFEST.MF:     $mf"
+
+        # Bundles already present (bare IDs, no version spec)
+        local rb_csv existing_ids
+        rb_csv=$(python3 "$py" "$mf")
+        existing_ids=$(echo "$rb_csv" | tr ',' '\n' | sed 's/;.*//' | tr -d ' \t')
+
+        local to_add=()
+
+        # Bundles from pom <dependencies> missing from Require-Bundle
+        for artifact in "${pom_deps[@]+"${pom_deps[@]}"}"; do
+            grep -qxF "$artifact" <<< "$existing_ids" || to_add+=("$artifact")
+        done
+
+        # Explicit DEPS_TO_ADD missing from Require-Bundle
+        for artifact in "${DEPS_TO_ADD[@]+"${DEPS_TO_ADD[@]}"}"; do
+            grep -qxF "$artifact" <<< "$existing_ids" || to_add+=("$artifact")
+        done
+
+        local add_args=() remove_args=()
+        [[ ${#to_add[@]}         -gt 0 ]] && add_args=(   "--add"    "${to_add[@]}"           )
+        [[ ${#DEPS_TO_REMOVE[@]} -gt 0 ]] && remove_args=("--remove" "${DEPS_TO_REMOVE[@]+"${DEPS_TO_REMOVE[@]}"}")
+
+        [[ ${#add_args[@]} -eq 0 && ${#remove_args[@]} -eq 0 ]] && continue
+
+        run python3 "$py" "$mf" \
+            "${add_args[@]+"${add_args[@]}"}" \
+            "${remove_args[@]+"${remove_args[@]}"}"
+
+    done < <(find "$repo_dir" -name "MANIFEST.MF" -not -path "*/target/*" -print0)
+
+    # 3. Drop the now-migrated <dependencies> block from the pom
+    if [[ ${#pom_deps[@]} -gt 0 ]]; then
+        echo "  removing <dependencies> from $pom"
         run xmlstarlet ed -L -N "$NS" \
-            -d "${XPATH_DEP}='${artifact}']" \
+            -d "//mvn:dependencies" \
             "$pom"
-    done
-
-    for artifact in "${DEPS_TO_ADD[@]+"${DEPS_TO_ADD[@]}"}"; do
-        if dep_exists "$artifact"; then
-            echo "  dep add: SKIP — ${artifact} already present in $pom" >&2
-            continue
-        fi
-        echo "  dep add:         $artifact"
-        run xmlstarlet ed -L -N "$NS" \
-            -s "//mvn:dependencies" -t elem -n "dependency" \
-            -s "//mvn:dependencies/dependency" -t elem -n "groupId"    -v "org.gama" \
-            -s "//mvn:dependencies/dependency" -t elem -n "artifactId" -v "${artifact}" \
-            -s "//mvn:dependencies/dependency" -t elem -n "version"    -v '${gama.version}' \
-            "$pom"
-    done
+    fi
 }
 
 bump_gama_parent_properties() {
@@ -238,9 +265,7 @@ bump_gama_parent_properties() {
     run xmlstarlet ed -L -N "$NS" \
         -u "//mvn:properties/mvn:gama.p2.version" -v "$GAMA_P2_VERSION" \
         "$pom"
-    run xmlstarlet ed -L -N "$NS" \
-        -u "//mvn:properties/mvn:gama.version" -v "[0,)" \
-        "$pom"
+
     local eclipse_url
     eclipse_url=$(xmlstarlet sel -N "$NS" -t \
         -v "//mvn:url[contains(., 'download.eclipse.org/releases/')]" \
@@ -285,6 +310,13 @@ bump_gama_parent_properties() {
             -u "//mvn:properties/mvn:jdk.version" -v "$JDK_VERSION" \
             "$pom"
     fi
+
+    # Cleaning old metadata
+    run xmlstarlet ed -L -N "$NS" \
+        -d "//mvn:repositories/mvn:repository[mvn:id='gamaRepo']" \
+        "$pom"
+    run xmlstarlet ed -L -N "$NS" \
+        -d "//mvn:properties/mvn:gama.version" "$pom"
 }
 
 bump_submodule_poms() {
@@ -382,8 +414,8 @@ bump_repo() {
         bump_feature_xml "$fxml" "$is_template"
     done < <(find "$repo_dir" -name "feature.xml" -not -path "*/target/*" -print0)
 
-    bump_category_xml "${repo_dir}/gama.plugin.p2updatesite/category.xml" "$is_template"
-    apply_dep_changes    "${repo_dir}/gama.plugin.parent/pom.xml"
+    bump_category_xml       "${repo_dir}/gama.plugin.p2updatesite/category.xml" "$is_template"
+    apply_manifest_changes  "$repo_dir"
 
     if [[ "$DRY_RUN" == false ]]; then
         if git -C "$repo_dir" diff --quiet HEAD; then
