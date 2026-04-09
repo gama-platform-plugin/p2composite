@@ -19,15 +19,12 @@ on:
         description: "Eclipse release for p2 repo URL (e.g. 2025-06)"
         required: true
         default: "2025-03"
-      # ── Optional plugin filter overrides ────────────────────────────────────
-      # Comma-separated eclipse-plugin IDs.
-      # For permanent changes, edit PLUGINS_TO_ADD / PLUGINS_TO_REMOVE in majorBumpRepoPlugin.sh instead.
-      plugins_to_add:
-        description: "Comma-separated eclipse-plugin IDs to add as exclusion filters"
+      deps_to_add:
+        description: "Comma-separated org.gama artifactIds to add to <dependencies>"
         required: false
         default: ""
-      plugins_to_remove:
-        description: "Comma-separated eclipse-plugin IDs to remove from exclusion filters"
+      deps_to_remove:
+        description: "Comma-separated org.gama artifactIds to remove from <dependencies>"
         required: false
         default: ""
 
@@ -96,42 +93,18 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Apply dispatch-input filter overrides into majorBumpRepoPlugin.sh
-        if: inputs.plugins_to_add != '' || inputs.plugins_to_remove != ''
-        env:
-          PLUGINS_TO_ADD: ${{ inputs.plugins_to_add }}
-          PLUGINS_TO_REMOVE: ${{ inputs.plugins_to_remove }}
-        run: |
-          # Inject dispatch-input IDs into the PLUGINS_TO_ADD / PLUGINS_TO_REMOVE arrays
-          # in majorBumpRepoPlugin.sh so they are picked up by apply_plugin_filters().
-          SCRIPT="bump-tools/majorBumpRepoPlugin.sh"
-
-          if [[ -n "$PLUGINS_TO_ADD" ]]; then
-              IFS=',' read -ra IDS <<< "$PLUGINS_TO_ADD"
-              for id in "${IDS[@]}"; do
-                  id="${id// /}"
-                  [[ -z "$id" ]] && continue
-                  sed -i "s|^PLUGINS_TO_ADD=($|PLUGINS_TO_ADD=(\n    \"${id}\"|" "$SCRIPT"
-              done
-          fi
-
-          if [[ -n "$PLUGINS_TO_REMOVE" ]]; then
-              IFS=',' read -ra IDS <<< "$PLUGINS_TO_REMOVE"
-              for id in "${IDS[@]}"; do
-                  id="${id// /}"
-                  [[ -z "$id" ]] && continue
-                  sed -i "s|^PLUGINS_TO_REMOVE=($|PLUGINS_TO_REMOVE=(\n    \"${id}\"|" "$SCRIPT"
-              done
-          fi
-
       - name: Bump versions and push ${{ inputs.new_branch }}
         env:
           NEW_BRANCH: ${{ inputs.new_branch }}
           ECLIPSE_RELEASE: ${{ inputs.eclipse_release }}
+          DEPS_TO_ADD: ${{ inputs.deps_to_add }}
+          DEPS_TO_REMOVE: ${{ inputs.deps_to_remove }}
           REPO: ${{ matrix.repo }}
         run: |
           FLAGS=""
           [[ "$REPO" == "gama.plugin.template" ]] && FLAGS="--is-template"
+          [[ -n "$DEPS_TO_ADD"    ]] && FLAGS="$FLAGS --deps-to-add    $DEPS_TO_ADD"
+          [[ -n "$DEPS_TO_REMOVE" ]] && FLAGS="$FLAGS --deps-to-remove $DEPS_TO_REMOVE"
 
           bash bump-tools/majorBumpRepoPlugin.sh \
             --repo-dir . \

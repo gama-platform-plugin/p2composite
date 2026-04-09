@@ -8,29 +8,31 @@
 #   ./majorBumpRepoPlugin.sh --repo-dir <path> --branch GAMA_2026-04 [--eclipse 2025-06] [--is-template] [--dry-run]
 #
 # Options:
-#   --branch      REQUIRED. New branch name, e.g. GAMA_2026-04
-#   --repo-dir    Process only this directory (skips fetch/base-checkout; for CI use)
-#   --is-template Also bump 1.0.0.qualifier placeholder versions (template repo only)
-#   --from        Base branch to branch from (batch mode; defaults to current branch)
-#   --eclipse     Eclipse release string for the p2 repo URL (default: 2025-03)
-#   --dry-run     Print what would happen without making any git or API calls
+#   --branch         REQUIRED. New branch name, e.g. GAMA_2026-04
+#   --repo-dir       Process only this directory (skips fetch/base-checkout; for CI use)
+#   --is-template    Also bump 1.0.0.qualifier placeholder versions (template repo only)
+#   --from           Base branch to branch from (batch mode; defaults to current branch)
+#   --eclipse        Eclipse release string for the p2 repo URL (default: 2025-03)
+#   --deps-to-add    Comma-separated org.gama artifactIds to add to <dependencies>
+#   --deps-to-remove Comma-separated org.gama artifactIds to remove from <dependencies>
+#   --dry-run        Print what would happen without making any git or API calls
 
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PLUGIN FILTERS
-# Edit these arrays before each release if the set of excluded Eclipse plugins
-# needs to change. Use --dry-run first to confirm the diff looks right.
+# MAVEN DEPENDENCY CHANGES  (org.gama artifacts in the <dependencies> block)
+# Edit these arrays before each release if the set of Maven deps needs to change.
+# Use --dry-run first to confirm the diff looks right.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Eclipse plugin IDs to ADD as <removeAll/> exclusion filter entries in parent pom:
-PLUGINS_TO_ADD=(
-    # "org.example.new.excluded.plugin"
+# artifactIds to ADD  (groupId=org.gama, version=${gama.version} are implicit):
+DEPS_TO_ADD=(
+    # "gama.api"
 )
 
-# Eclipse plugin IDs to REMOVE from exclusion filters (re-enables them at build time):
-PLUGINS_TO_REMOVE=(
-    # "org.eclipse.jdt.core"
+# artifactIds to REMOVE:
+DEPS_TO_REMOVE=(
+    # "gama.core"
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -46,12 +48,20 @@ DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --branch)      NEW_BRANCH="$2";      shift 2 ;;
-        --from)        FROM_BRANCH="$2";     shift 2 ;;
-        --eclipse)     ECLIPSE_RELEASE="$2"; shift 2 ;;
-        --repo-dir)    REPO_DIR="$2";        shift 2 ;;
-        --is-template) IS_TEMPLATE=true;     shift   ;;
-        --dry-run)     DRY_RUN=true;         shift   ;;
+        --branch)         NEW_BRANCH="$2";      shift 2 ;;
+        --from)           FROM_BRANCH="$2";   shift 2 ;;
+        --eclipse)        ECLIPSE_RELEASE="$2"; shift 2 ;;
+        --repo-dir)       REPO_DIR="$2";      shift 2 ;;
+        --is-template)    IS_TEMPLATE=true;   shift   ;;
+        --dry-run)        DRY_RUN=true;       shift   ;;
+        --deps-to-add)
+            IFS=',' read -ra _tmp <<< "$2"
+            DEPS_TO_ADD+=( "${_tmp[@]}" )
+            shift 2 ;;
+        --deps-to-remove)
+            IFS=',' read -ra _tmp <<< "$2"
+            DEPS_TO_REMOVE+=( "${_tmp[@]}" )
+            shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1  ;;
     esac
 done
@@ -190,18 +200,42 @@ bump_category_xml() {
         "$xml"
 }
 
-apply_plugin_filters() {
+apply_dep_changes() {
     local pom="$1"
     [[ -f "$pom" ]] || return 0
-    for id in "${PLUGINS_TO_REMOVE[@]+"${PLUGINS_TO_REMOVE[@]}"}"; do
-        echo "  filter remove:   $id"
-        run sed -i "/<filter>.*<id>${id}<\/id>.*<removeAll\/><\/filter>/d" "$pom"
+
+    # Maven pom.xml carries a default namespace — all XPath must use the mvn: prefix
+    local NS="mvn=http://maven.apache.org/POM/4.0.0"
+    local XPATH_DEP="//mvn:dependencies/mvn:dependency[mvn:artifactId"
+
+    dep_exists() {
+        [[ -n "$(xmlstarlet sel -N "$NS" -t \
+            -v "${XPATH_DEP}='${1}']/mvn:artifactId" "$pom" 2>/dev/null)" ]]
+    }
+
+    for artifact in "${DEPS_TO_REMOVE[@]+"${DEPS_TO_REMOVE[@]}"}"; do
+        if ! dep_exists "$artifact"; then
+            echo "  dep remove: SKIP — ${artifact} not found in $pom" >&2
+            continue
+        fi
+        echo "  dep remove:      $artifact"
+        run xmlstarlet ed -L -N "$NS" \
+            -d "${XPATH_DEP}='${artifact}']" \
+            "$pom"
     done
-    for id in "${PLUGINS_TO_ADD[@]+"${PLUGINS_TO_ADD[@]}"}"; do
-        echo "  filter add:      $id"
-        local line="                        <filter><type>eclipse-plugin<\/type><id>${id}<\/id><removeAll\/><\/filter>"
-        run sed -i "/<filters>/a\\
-${line}" "$pom"
+
+    for artifact in "${DEPS_TO_ADD[@]+"${DEPS_TO_ADD[@]}"}"; do
+        if dep_exists "$artifact"; then
+            echo "  dep add: SKIP — ${artifact} already present in $pom" >&2
+            continue
+        fi
+        echo "  dep add:         $artifact"
+        run xmlstarlet ed -L -N "$NS" \
+            -s "//mvn:dependencies" -t elem -n "dependency"  \
+            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "groupId"    -v "org.gama" \
+            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "artifactId" -v "${artifact}" \
+            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "version"    -v '${gama.version}' \
+            "$pom"
     done
 }
 
@@ -254,7 +288,7 @@ bump_repo() {
     done < <(find "$repo_dir" -name "feature.xml" -not -path "*/target/*" -print0)
 
     bump_category_xml "${repo_dir}/gama.plugin.p2updatesite/category.xml" "$is_template"
-    apply_plugin_filters "${repo_dir}/gama.plugin.parent/pom.xml"
+    apply_dep_changes    "${repo_dir}/gama.plugin.parent/pom.xml"
 
     if [[ "$DRY_RUN" == false ]]; then
         if git -C "$repo_dir" diff --quiet HEAD; then
