@@ -45,6 +45,8 @@ ECLIPSE_RELEASE="2025-03"
 REPO_DIR=""
 IS_TEMPLATE=false
 DRY_RUN=false
+TYCHO_VERSION=""
+JDK_VERSION=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,6 +56,8 @@ while [[ $# -gt 0 ]]; do
         --repo-dir)       REPO_DIR="$2";      shift 2 ;;
         --is-template)    IS_TEMPLATE=true;   shift   ;;
         --dry-run)        DRY_RUN=true;       shift   ;;
+        --tycho-version)  TYCHO_VERSION="$2"; shift 2 ;;
+        --jdk-version)    JDK_VERSION="$2";   shift 2 ;;
         --deps-to-add)
             IFS=',' read -ra _tmp <<< "$2"
             DEPS_TO_ADD+=( "${_tmp[@]}" )
@@ -137,23 +141,6 @@ run() {
     fi
 }
 
-bump_parent_pom() {
-    local pom="$1"
-    [[ -f "$pom" ]] || return 0
-    echo "  pom (parent):    $pom"
-    run sed -i -E \
-        's|<version>[0-9]+\.[0-9]+\.0-SNAPSHOT</version>|<version>'"${GAMA_MAVEN_VERSION}"'</version>|g' \
-        "$pom"
-    run sed -i -E \
-        's|<gama\.p2\.version>[0-9]{4}\.[0-9]{2}</gama\.p2\.version>|<gama.p2.version>'"${GAMA_P2_VERSION}"'</gama.p2.version>|' \
-        "$pom"
-    run sed -i -E \
-        's|<gama\.version>\[[0-9]+\.[0-9]+\.0,\)</gama\.version>|<gama.version>['"${GAMA_P2_VERSION}"'.0,)</gama.version>|' \
-        "$pom"
-    run sed -i -E \
-        's|(download\.eclipse\.org/releases/)[0-9]{4}-[0-9]{2}|\1'"${ECLIPSE_RELEASE}"'|' \
-        "$pom"
-}
 
 bump_p2site_pom() {
     local pom="$1"
@@ -231,12 +218,73 @@ apply_dep_changes() {
         fi
         echo "  dep add:         $artifact"
         run xmlstarlet ed -L -N "$NS" \
-            -s "//mvn:dependencies" -t elem -n "dependency"  \
-            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "groupId"    -v "org.gama" \
-            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "artifactId" -v "${artifact}" \
-            -s "//mvn:dependencies/mvn:dependency[last()]" -t elem -n "version"    -v '${gama.version}' \
+            -s "//mvn:dependencies" -t elem -n "dependency" \
+            -s "//mvn:dependencies/dependency" -t elem -n "groupId"    -v "org.gama" \
+            -s "//mvn:dependencies/dependency" -t elem -n "artifactId" -v "${artifact}" \
+            -s "//mvn:dependencies/dependency" -t elem -n "version"    -v '${gama.version}' \
             "$pom"
     done
+}
+
+bump_gama_parent_properties() {
+    local pom="$1"
+    [[ -f "$pom" ]] || return 0
+    echo "  pom (parent):    $pom"
+    local NS="mvn=http://maven.apache.org/POM/4.0.0"
+
+    run xmlstarlet ed -L -N "$NS" \
+        -u "//mvn:version[contains(., '.0-SNAPSHOT')]" -v "$GAMA_MAVEN_VERSION" \
+        "$pom"
+    run xmlstarlet ed -L -N "$NS" \
+        -u "//mvn:properties/mvn:gama.p2.version" -v "$GAMA_P2_VERSION" \
+        "$pom"
+    run xmlstarlet ed -L -N "$NS" \
+        -u "//mvn:properties/mvn:gama.version" -v "[${GAMA_P2_VERSION}.0,)" \
+        "$pom"
+    local eclipse_url
+    eclipse_url=$(xmlstarlet sel -N "$NS" -t \
+        -v "//mvn:url[contains(., 'download.eclipse.org/releases/')]" \
+        "$pom" 2>/dev/null || true)
+    if [[ "$eclipse_url" == *'${eclipse.p2.version}'* ]]; then
+        # Already using the property — just bump its value
+        echo "    eclipse.p2.version → $ECLIPSE_RELEASE"
+        run xmlstarlet ed -L -N "$NS" \
+            -u "//mvn:properties/mvn:eclipse.p2.version" -v "$ECLIPSE_RELEASE" \
+            "$pom"
+    elif [[ -n "$eclipse_url" ]]; then
+        # Hardcoded URL — migrate to property, then set the property value
+        echo "    eclipse URL: migrating to \${eclipse.p2.version} = $ECLIPSE_RELEASE"
+        run xmlstarlet ed -L -N "$NS" \
+            -u "//mvn:url[contains(., 'download.eclipse.org/releases/')]" \
+            -v 'https://download.eclipse.org/releases/${eclipse.p2.version}' \
+            "$pom"
+        local prop_exists
+        prop_exists=$(xmlstarlet sel -N "$NS" -t \
+            -v "//mvn:properties/mvn:eclipse.p2.version" \
+            "$pom" 2>/dev/null || true)
+        if [[ -n "$prop_exists" ]]; then
+            run xmlstarlet ed -L -N "$NS" \
+                -u "//mvn:properties/mvn:eclipse.p2.version" -v "$ECLIPSE_RELEASE" \
+                "$pom"
+        else
+            run xmlstarlet ed -L -N "$NS" \
+                -s "//mvn:properties" -t elem -n "eclipse.p2.version" -v "$ECLIPSE_RELEASE" \
+                "$pom"
+        fi
+    fi
+
+    if [[ -n "$TYCHO_VERSION" ]]; then
+        echo "    tycho.version → $TYCHO_VERSION"
+        run xmlstarlet ed -L -N "$NS" \
+            -u "//mvn:properties/mvn:tycho.version" -v "$TYCHO_VERSION" \
+            "$pom"
+    fi
+    if [[ -n "$JDK_VERSION" ]]; then
+        echo "    jdk.version → $JDK_VERSION"
+        run xmlstarlet ed -L -N "$NS" \
+            -u "//mvn:properties/mvn:jdk.version" -v "$JDK_VERSION" \
+            "$pom"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -280,8 +328,8 @@ bump_repo() {
 
     run git -C "$repo_dir" checkout -b "$NEW_BRANCH"
 
-    bump_parent_pom  "${repo_dir}/gama.plugin.parent/pom.xml"
-    bump_p2site_pom  "${repo_dir}/gama.plugin.p2updatesite/pom.xml"
+    bump_gama_parent_properties "${repo_dir}/gama.plugin.parent/pom.xml"
+    bump_p2site_pom             "${repo_dir}/gama.plugin.p2updatesite/pom.xml"
 
     while IFS= read -r -d '' fxml; do
         bump_feature_xml "$fxml" "$is_template"

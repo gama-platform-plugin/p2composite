@@ -27,6 +27,14 @@ on:
         description: "Comma-separated org.gama artifactIds to remove from <dependencies>"
         required: false
         default: ""
+      tycho_version:
+        description: "Tycho version to set in gama.parent/pom.xml (e.g. 4.0.9)"
+        required: false
+        default: ""
+      jdk_version:
+        description: "JDK version to set in gama.parent/pom.xml (e.g. 21)"
+        required: false
+        default: ""
 
 env:
   ORG: gama-platform-plugin
@@ -103,12 +111,16 @@ jobs:
           ECLIPSE_RELEASE: ${{ inputs.eclipse_release }}
           DEPS_TO_ADD: ${{ inputs.deps_to_add }}
           DEPS_TO_REMOVE: ${{ inputs.deps_to_remove }}
+          TYCHO_VERSION: ${{ inputs.tycho_version }}
+          JDK_VERSION: ${{ inputs.jdk_version }}
           REPO: ${{ matrix.repo }}
         run: |
           FLAGS=""
           [[ "$REPO" == "gama.plugin.template" ]] && FLAGS="--is-template"
-          [[ -n "$DEPS_TO_ADD"    ]] && FLAGS="$FLAGS --deps-to-add    $DEPS_TO_ADD"
-          [[ -n "$DEPS_TO_REMOVE" ]] && FLAGS="$FLAGS --deps-to-remove $DEPS_TO_REMOVE"
+          [[ -n "$DEPS_TO_ADD"     ]] && FLAGS="$FLAGS --deps-to-add     $DEPS_TO_ADD"
+          [[ -n "$DEPS_TO_REMOVE"  ]] && FLAGS="$FLAGS --deps-to-remove  $DEPS_TO_REMOVE"
+          [[ -n "$TYCHO_VERSION"   ]] && FLAGS="$FLAGS --tycho-version   $TYCHO_VERSION"
+          [[ -n "$JDK_VERSION"     ]] && FLAGS="$FLAGS --jdk-version     $JDK_VERSION"
 
           bash "$GITHUB_WORKSPACE"/bump-tools/majorBumpRepoPlugin.sh \
             --repo-dir . \
