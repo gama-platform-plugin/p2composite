@@ -71,7 +71,16 @@ jobs:
       fail-fast: false   # keep bumping other repos if one fails
 
     steps:
-      # Fetch majorBumpRepoPlugin.sh from p2composite into a separate subdirectory
+      # 1. Check out the target repo into the default workspace root first
+      - name: Checkout ${{ matrix.repo }} @ ${{ inputs.from_branch }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.ORG }}/${{ matrix.repo }}
+          ref: ${{ inputs.from_branch }}
+          token: ${{ secrets.ORG_DISPATCH_TOKEN }}
+
+      # 2. Fetch majorBumpRepoPlugin.sh from p2composite into a separate subdirectory
+      # Swapping this to be second prevents it from being wiped by the first checkout.
       - name: Checkout p2composite (bump script)
         uses: actions/checkout@v6
         with:
@@ -80,21 +89,8 @@ jobs:
           token: ${{ secrets.ORG_DISPATCH_TOKEN }}
           path: bump-tools
 
-      # Check out the target repo into the default workspace root
-      - name: Checkout ${{ matrix.repo }} @ ${{ inputs.from_branch }}
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.ORG }}/${{ matrix.repo }}
-          ref: ${{ inputs.from_branch }}
-          token: ${{ secrets.ORG_DISPATCH_TOKEN }}
-
       - name: Install xmlstarlet
-        run: |
-          sudo apt-get install -y xmlstarlet
-          echo "== Workspace"
-          ls -lah
-          echo "== Local"
-          ls -lah $GITHUB_WORKSPACE
+        run: sudo apt-get install -y xmlstarlet
 
       - name: Configure git identity
         run: |
