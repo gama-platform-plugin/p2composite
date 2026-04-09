@@ -1,0 +1,148 @@
+name: Bump all repos to new GAMA version
+run-name: "Bump → ${{ inputs.new_branch }} (Eclipse ${{ inputs.eclipse_release }})"
+
+# Dispatch from the p2composite repo Actions tab.
+# Requires ORG_DISPATCH_TOKEN with contents:write + administration:write on all
+# gama-platform-plugin repos.
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_branch:
+        description: "New branch name (e.g. GAMA_2026-04)"
+        required: true
+      from_branch:
+        description: "Base branch to create from"
+        required: true
+        default: "GAMA_2025-06"
+      eclipse_release:
+        description: "Eclipse release for p2 repo URL (e.g. 2025-06)"
+        required: true
+        default: "2025-03"
+      # ── Optional plugin filter overrides ────────────────────────────────────
+      # Comma-separated eclipse-plugin IDs.
+      # For permanent changes, edit PLUGINS_TO_ADD / PLUGINS_TO_REMOVE in majorBumpRepoPlugin.sh instead.
+      plugins_to_add:
+        description: "Comma-separated eclipse-plugin IDs to add as exclusion filters"
+        required: false
+        default: ""
+      plugins_to_remove:
+        description: "Comma-separated eclipse-plugin IDs to remove from exclusion filters"
+        required: false
+        default: ""
+
+env:
+  ORG: gama-platform-plugin
+
+jobs:
+  # ── Job 1: discover repos ───────────────────────────────────────────────────
+  list-repos:
+    name: List plugin repos
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.list.outputs.repos }}
+
+    steps:
+      - name: Query org repos
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.ORG_DISPATCH_TOKEN }}
+        run: |
+          # Same filter as generate_composite.sh:
+          # non-archived, no "template" or "no-p2" topic.
+          PLUGIN_REPOS=$(gh api "orgs/${ORG}/repos" \
+              --paginate \
+              --jq '[.[] | select(.archived == false)
+                         | select(.topics | (contains(["template"]) or contains(["no-p2"])) | not)
+                         | .name]')
+
+          # gama.plugin.template carries the "template" topic so it's excluded above;
+          # add it explicitly because we want to bump it too.
+          REPOS=$(echo "$PLUGIN_REPOS" | jq -c '. + ["gama.plugin.template", "p2composite"]')
+
+          echo "repos=${REPOS}" >> "$GITHUB_OUTPUT"
+          echo "Repos to bump: $(echo "$REPOS" | jq -r '.[]' | tr '\n' ' ')"
+
+  # ── Job 2: bump each repo ───────────────────────────────────────────────────
+  bump:
+    name: "Bump ${{ matrix.repo }}"
+    needs: list-repos
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ${{ fromJson(needs.list-repos.outputs.repos) }}
+      fail-fast: false   # keep bumping other repos if one fails
+
+    steps:
+      # Fetch majorBumpRepoPlugin.sh from p2composite into a separate subdirectory
+      - name: Checkout p2composite (bump script)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ORG }}/p2composite
+          ref: ${{ inputs.from_branch }}
+          token: ${{ secrets.ORG_DISPATCH_TOKEN }}
+          path: bump-tools
+
+      # Check out the target repo into the default workspace root
+      - name: Checkout ${{ matrix.repo }} @ ${{ inputs.from_branch }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ORG }}/${{ matrix.repo }}
+          ref: ${{ inputs.from_branch }}
+          token: ${{ secrets.ORG_DISPATCH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Apply dispatch-input filter overrides into majorBumpRepoPlugin.sh
+        if: inputs.plugins_to_add != '' || inputs.plugins_to_remove != ''
+        env:
+          PLUGINS_TO_ADD: ${{ inputs.plugins_to_add }}
+          PLUGINS_TO_REMOVE: ${{ inputs.plugins_to_remove }}
+        run: |
+          # Inject dispatch-input IDs into the PLUGINS_TO_ADD / PLUGINS_TO_REMOVE arrays
+          # in majorBumpRepoPlugin.sh so they are picked up by apply_plugin_filters().
+          SCRIPT="bump-tools/majorBumpRepoPlugin.sh"
+
+          if [[ -n "$PLUGINS_TO_ADD" ]]; then
+              IFS=',' read -ra IDS <<< "$PLUGINS_TO_ADD"
+              for id in "${IDS[@]}"; do
+                  id="${id// /}"
+                  [[ -z "$id" ]] && continue
+                  sed -i "s|^PLUGINS_TO_ADD=($|PLUGINS_TO_ADD=(\n    \"${id}\"|" "$SCRIPT"
+              done
+          fi
+
+          if [[ -n "$PLUGINS_TO_REMOVE" ]]; then
+              IFS=',' read -ra IDS <<< "$PLUGINS_TO_REMOVE"
+              for id in "${IDS[@]}"; do
+                  id="${id// /}"
+                  [[ -z "$id" ]] && continue
+                  sed -i "s|^PLUGINS_TO_REMOVE=($|PLUGINS_TO_REMOVE=(\n    \"${id}\"|" "$SCRIPT"
+              done
+          fi
+
+      - name: Bump versions and push ${{ inputs.new_branch }}
+        env:
+          NEW_BRANCH: ${{ inputs.new_branch }}
+          ECLIPSE_RELEASE: ${{ inputs.eclipse_release }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          FLAGS=""
+          [[ "$REPO" == "gama.plugin.template" ]] && FLAGS="--is-template"
+
+          bash bump-tools/majorBumpRepoPlugin.sh \
+            --repo-dir . \
+            --branch  "$NEW_BRANCH" \
+            --eclipse "$ECLIPSE_RELEASE" \
+            $FLAGS
+
+      - name: Set ${{ inputs.new_branch }} as default branch
+        env:
+          GH_TOKEN: ${{ secrets.ORG_DISPATCH_TOKEN }}
+        run: |
+          gh api --method PATCH "repos/${ORG}/${{ matrix.repo }}" \
+              -f "default_branch=${{ inputs.new_branch }}"
+          echo "✓ Default branch → ${{ inputs.new_branch }}"

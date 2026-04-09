@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# majorBumpRepoPlugin.sh — Create a new GAMA version branch across all plugin repos and bump version strings.
+#
+# Batch mode (local, iterates all repos):
+#   ./majorBumpRepoPlugin.sh --branch GAMA_2026-04 [--eclipse 2025-06] [--from GAMA_2025-06] [--dry-run]
+#
+# Single-repo mode (used by the GitHub Action — repo already checked out):
+#   ./majorBumpRepoPlugin.sh --repo-dir <path> --branch GAMA_2026-04 [--eclipse 2025-06] [--is-template] [--dry-run]
+#
+# Options:
+#   --branch      REQUIRED. New branch name, e.g. GAMA_2026-04
+#   --repo-dir    Process only this directory (skips fetch/base-checkout; for CI use)
+#   --is-template Also bump 1.0.0.qualifier placeholder versions (template repo only)
+#   --from        Base branch to branch from (batch mode; defaults to current branch)
+#   --eclipse     Eclipse release string for the p2 repo URL (default: 2025-03)
+#   --dry-run     Print what would happen without making any git or API calls
+
+set -euo pipefail
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLUGIN FILTERS
+# Edit these arrays before each release if the set of excluded Eclipse plugins
+# needs to change. Use --dry-run first to confirm the diff looks right.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Eclipse plugin IDs to ADD as <removeAll/> exclusion filter entries in parent pom:
+PLUGINS_TO_ADD=(
+    # "org.example.new.excluded.plugin"
+)
+
+# Eclipse plugin IDs to REMOVE from exclusion filters (re-enables them at build time):
+PLUGINS_TO_REMOVE=(
+    # "org.eclipse.jdt.core"
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Argument parsing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+NEW_BRANCH=""
+FROM_BRANCH=""
+ECLIPSE_RELEASE="2025-03"
+REPO_DIR=""
+IS_TEMPLATE=false
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --branch)      NEW_BRANCH="$2";      shift 2 ;;
+        --from)        FROM_BRANCH="$2";     shift 2 ;;
+        --eclipse)     ECLIPSE_RELEASE="$2"; shift 2 ;;
+        --repo-dir)    REPO_DIR="$2";        shift 2 ;;
+        --is-template) IS_TEMPLATE=true;     shift   ;;
+        --dry-run)     DRY_RUN=true;         shift   ;;
+        *) echo "Unknown option: $1" >&2; exit 1  ;;
+    esac
+done
+
+if [[ -z "$NEW_BRANCH" ]]; then
+    echo "Error: --branch is required  (e.g. --branch GAMA_2026-04)" >&2
+    exit 1
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Version derivation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if [[ "$NEW_BRANCH" =~ ^GAMA_([0-9]{4})-([0-9]{2})$ ]]; then
+    YEAR="${BASH_REMATCH[1]}"
+    MONTH_PADDED="${BASH_REMATCH[2]}"
+    [[ "$MONTH_PADDED" == "0"* ]] && MONTH="${MONTH_PADDED#0}" || MONTH="$MONTH_PADDED"
+else
+    echo "Error: branch '${NEW_BRANCH}' does not match GAMA_YYYY-MM" >&2
+    exit 1
+fi
+
+GAMA_P2_VERSION="${YEAR}.${MONTH_PADDED}"            # 2026.04
+GAMA_MAVEN_VERSION="${YEAR}.${MONTH}.0-SNAPSHOT"     # 2026.4.0-SNAPSHOT
+GAMA_FEATURE_VERSION="${YEAR}.${MONTH}.0.qualifier"  # 2026.4.0.qualifier
+
+printf '\n%-22s %s\n' "New branch:"      "$NEW_BRANCH"
+printf   '%-22s %s\n' "P2 version:"      "$GAMA_P2_VERSION"
+printf   '%-22s %s\n' "Maven version:"   "$GAMA_MAVEN_VERSION"
+printf   '%-22s %s\n' "Feature version:" "$GAMA_FEATURE_VERSION"
+printf   '%-22s %s\n' "Eclipse release:" "$ECLIPSE_RELEASE"
+[[ "$DRY_RUN" == true ]] && printf '%-22s %s\n\n' "Mode:" "DRY RUN (no commits / pushes / API calls)"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Repo layout
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGINS_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Local directory name → GitHub repo name (only needed where they differ)
+declare -A GITHUB_REPO_NAME=(
+    [gama.plugin.template]="plugin-template"
+    # All other repos: local name == GitHub name
+)
+github_name() { echo "${GITHUB_REPO_NAME[$1]:-$1}"; }
+
+# All repos to bump in batch mode (local dir names).
+# p2composite is included; its pom/feature helpers are no-ops since those files
+# don't exist there, so it just gets a branch + empty commit.
+PLUGIN_REPOS=(
+    gama.graphical.modeling
+    gama.plugin.across-lab
+    gama.plugin.femtost
+    gama.plugin.genstar
+    gama.plugin.inrae
+    gama.plugin.irit
+    gama.plugin.legacy
+    gama.plugin.mcp
+    gama.plugin.template   # is_template=true, handled below
+    p2composite
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+run() {
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "  [dry-run] $*"
+    else
+        "$@"
+    fi
+}
+
+bump_parent_pom() {
+    local pom="$1"
+    [[ -f "$pom" ]] || return 0
+    echo "  pom (parent):    $pom"
+    run sed -i -E \
+        's|<version>[0-9]+\.[0-9]+\.0-SNAPSHOT</version>|<version>'"${GAMA_MAVEN_VERSION}"'</version>|g' \
+        "$pom"
+    run sed -i -E \
+        's|<gama\.p2\.version>[0-9]{4}\.[0-9]{2}</gama\.p2\.version>|<gama.p2.version>'"${GAMA_P2_VERSION}"'</gama.p2.version>|' \
+        "$pom"
+    run sed -i -E \
+        's|<gama\.version>\[[0-9]+\.[0-9]+\.0,\)</gama\.version>|<gama.version>['"${GAMA_P2_VERSION}"'.0,)</gama.version>|' \
+        "$pom"
+    run sed -i -E \
+        's|(download\.eclipse\.org/releases/)[0-9]{4}-[0-9]{2}|\1'"${ECLIPSE_RELEASE}"'|' \
+        "$pom"
+}
+
+bump_p2site_pom() {
+    local pom="$1"
+    [[ -f "$pom" ]] || return 0
+    echo "  pom (p2site):    $pom"
+    run sed -i -E \
+        's|<version>[0-9]+\.[0-9]+\.0-SNAPSHOT</version>|<version>'"${GAMA_MAVEN_VERSION}"'</version>|g' \
+        "$pom"
+}
+
+bump_feature_xml() {
+    local xml="$1"
+    local is_template="${2:-false}"
+    [[ -f "$xml" ]] || return 0
+    echo "  feature.xml:     $xml"
+    if [[ "$is_template" == true ]]; then
+        run sed -i -E \
+            's|version="1\.0\.0\.qualifier"|version="'"${GAMA_FEATURE_VERSION}"'"|g' \
+            "$xml"
+    fi
+    run sed -i -E \
+        's|version="20[0-9][0-9]\.[0-9]+\.0\.qualifier"|version="'"${GAMA_FEATURE_VERSION}"'"|g' \
+        "$xml"
+}
+
+bump_category_xml() {
+    local xml="$1"
+    local is_template="${2:-false}"
+    [[ -f "$xml" ]] || return 0
+    echo "  category.xml:    $xml"
+    if [[ "$is_template" == true ]]; then
+        run sed -i -E \
+            's|_1\.0\.0\.qualifier\.jar|_'"${GAMA_FEATURE_VERSION}"'.jar|g' \
+            "$xml"
+        run sed -i -E \
+            's|version="1\.0\.0\.qualifier"|version="'"${GAMA_FEATURE_VERSION}"'"|g' \
+            "$xml"
+    fi
+    run sed -i -E \
+        's|_20[0-9][0-9]\.[0-9]+\.0\.qualifier\.jar|_'"${GAMA_FEATURE_VERSION}"'.jar|g' \
+        "$xml"
+    run sed -i -E \
+        's|version="20[0-9][0-9]\.[0-9]+\.0\.qualifier"|version="'"${GAMA_FEATURE_VERSION}"'"|g' \
+        "$xml"
+}
+
+apply_plugin_filters() {
+    local pom="$1"
+    [[ -f "$pom" ]] || return 0
+    for id in "${PLUGINS_TO_REMOVE[@]+"${PLUGINS_TO_REMOVE[@]}"}"; do
+        echo "  filter remove:   $id"
+        run sed -i "/<filter>.*<id>${id}<\/id>.*<removeAll\/><\/filter>/d" "$pom"
+    done
+    for id in "${PLUGINS_TO_ADD[@]+"${PLUGINS_TO_ADD[@]}"}"; do
+        echo "  filter add:      $id"
+        local line="                        <filter><type>eclipse-plugin<\/type><id>${id}<\/id><removeAll\/><\/filter>"
+        run sed -i "/<filters>/a\\
+${line}" "$pom"
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# bump_repo  —  the single entry point for processing one repo
+#
+# $1  repo_dir     : path to the repo
+# $2  is_template  : true → also bump 1.0.0.qualifier placeholders
+# $3  fetch_base   : true (default) → fetch + checkout base before branching
+#                    false → repo is already on the correct base (CI/--repo-dir)
+# ═══════════════════════════════════════════════════════════════════════════════
+bump_repo() {
+    local repo_dir="$1"
+    local is_template="${2:-false}"
+    local fetch_base="${3:-true}"
+    local repo_name
+    repo_name="$(basename "$repo_dir")"
+
+    printf '\n%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '  %s\n'  "$repo_name"
+    printf '%s\n'    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        echo "  ✗ Not a git repo — skipping"
+        return
+    fi
+
+    if [[ "$fetch_base" == true ]]; then
+        local base
+        if [[ -n "$FROM_BRANCH" ]]; then
+            base="$FROM_BRANCH"
+        else
+            base="$(git -C "$repo_dir" symbolic-ref --short HEAD 2>/dev/null)" || \
+            base="$(gh api "repos/gama-platform-plugin/$(github_name "$repo_name")" \
+                       --jq '.default_branch' 2>/dev/null)" || \
+            base="main"
+        fi
+        echo "  Base branch: $base"
+        run git -C "$repo_dir" fetch --quiet origin
+        run git -C "$repo_dir" checkout "$base"
+    fi
+
+    run git -C "$repo_dir" checkout -b "$NEW_BRANCH"
+
+    bump_parent_pom  "${repo_dir}/gama.plugin.parent/pom.xml"
+    bump_p2site_pom  "${repo_dir}/gama.plugin.p2updatesite/pom.xml"
+
+    while IFS= read -r -d '' fxml; do
+        bump_feature_xml "$fxml" "$is_template"
+    done < <(find "$repo_dir" -name "feature.xml" -not -path "*/target/*" -print0)
+
+    bump_category_xml "${repo_dir}/gama.plugin.p2updatesite/category.xml" "$is_template"
+    apply_plugin_filters "${repo_dir}/gama.plugin.parent/pom.xml"
+
+    if [[ "$DRY_RUN" == false ]]; then
+        if git -C "$repo_dir" diff --quiet HEAD; then
+            git -C "$repo_dir" commit --allow-empty -m "chore: bump to ${NEW_BRANCH}"
+        else
+            git -C "$repo_dir" add -A
+            git -C "$repo_dir" commit -m "chore: bump to ${NEW_BRANCH}"
+        fi
+        git -C "$repo_dir" push -u origin "$NEW_BRANCH"
+        echo "  ✓ pushed ${NEW_BRANCH}"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Single-repo mode (--repo-dir) ─────────────────────────────────────────────
+if [[ -n "$REPO_DIR" ]]; then
+    bump_repo "$(cd "$REPO_DIR" && pwd)" "$IS_TEMPLATE" false
+    printf '\n✓ Done!  New branch: %s  (%s)\n\n' "$NEW_BRANCH" "$GAMA_MAVEN_VERSION"
+    exit 0
+fi
+
+# ── Batch mode ────────────────────────────────────────────────────────────────
+for repo in "${PLUGIN_REPOS[@]}"; do
+    is_tmpl=false
+    [[ "$repo" == "gama.plugin.template" ]] && is_tmpl=true
+    bump_repo "${PLUGINS_DIR}/${repo}" "$is_tmpl"
+done
+
+if [[ "$DRY_RUN" == false ]]; then
+    printf '\n%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '  Setting default branches on GitHub\n'
+    printf '%s\n'   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    for repo in "${PLUGIN_REPOS[@]}"; do
+        gh_name="$(github_name "$repo")"
+        echo "  gama-platform-plugin/${gh_name} → ${NEW_BRANCH}"
+        gh api --method PATCH "repos/gama-platform-plugin/${gh_name}" \
+            -f "default_branch=${NEW_BRANCH}"
+    done
+fi
+
+printf '\n✓ Done!  New branch: %s  (%s)\n\n' "$NEW_BRANCH" "$GAMA_MAVEN_VERSION"
