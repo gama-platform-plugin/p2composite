@@ -88,7 +88,7 @@ else
     exit 1
 fi
 
-GAMA_P2_VERSION="${YEAR}.${MONTH}"                   # 2026.4
+GAMA_P2_VERSION="${YEAR}-${MONTH_PADDED}"             # 2025-06
 GAMA_MAVEN_VERSION="${YEAR}.${MONTH}.0-SNAPSHOT"     # 2026.4.0-SNAPSHOT
 GAMA_FEATURE_VERSION="${YEAR}.${MONTH}.0.qualifier"  # 2026.4.0.qualifier
 
