@@ -23,8 +23,11 @@ jobs:
       - name: Log triggering repo
         if: github.event_name == 'repository_dispatch'
         run: |
-          echo "Triggered by: ${{ github.event.client_payload.repo }}"
-          echo "Plugin name:  ${{ github.event.client_payload.name }}"
+          echo "Triggered by: ${CLIENT_PAYLOAD_REPO}"
+          echo "Plugin name:  ${CLIENT_PAYLOAD_NAME}"
+        env:
+          CLIENT_PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
+          CLIENT_PAYLOAD_NAME: ${{ github.event.client_payload.name }}
 
       - name: Regenerate and deploy composite
         run: bash generate_composite.sh

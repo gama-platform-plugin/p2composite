@@ -132,6 +132,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ORG_DISPATCH_TOKEN }}
         run: |
-          gh api --method PATCH "repos/${ORG}/${{ matrix.repo }}" \
-              -f "default_branch=${{ inputs.new_branch }}"
-          echo "✓ Default branch → ${{ inputs.new_branch }}"
+          gh api --method PATCH "repos/${ORG}/${MATRIX_REPO}" \
+              -f "default_branch=${NEW_BRANCH}"
+          echo "✓ Default branch → ${NEW_BRANCH}"
+        env:
+          MATRIX_REPO: ${{ matrix.repo }}
+          NEW_BRANCH: ${{ inputs.new_branch }}
